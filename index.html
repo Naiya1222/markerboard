@@ -49,8 +49,15 @@ function toggleBoards(open){open??=$('#boardsMenu').classList.contains('hidden')
 function renderBoardList(){const list=$('#boardsList');list.replaceChildren();for(const e of catalog.entries){const row=node('button','board-row');row.setAttribute('aria-current',e.id===(board.id||'main')?'true':'false');row.append(node('span','',e.name),node('small','',e.count+' 個項目'));row.onclick=()=>switchBoard(e.id);list.append(row)}}
 function sourceKey(c){return JSON.stringify([c.projectId||'',c.sequenceId||''])}
 function acceptsSource(c){return board.sourceKeys==null||board.sourceKeys.includes(sourceKey(c))}
-function boardSources(){return sources.filter(acceptsSource)}
-function renderSourcePicker(){const select=$('#sourceSelect'),value=board.sourceKeys==null?'all':board.sourceKeys[0]||'none';select.replaceChildren();const choices=[['none','不自動匯入標記'],['all','所有已接收的序列']],seen=new Set();for(const c of sources){const key=sourceKey(c);if(!seen.has(key)){seen.add(key);choices.push([key,c.sequenceName||'未命名序列'])}}if(!['none','all'].includes(value)&&!seen.has(value))choices.push([value,'已選序列（等待接收）']);for(const [id,title]of choices){const o=node('option','',title);o.value=id;select.append(o)}select.value=value}
+function boardSources(){return sources.filter(c=>c.sequenceAvailable!==false&&acceptsSource(c))}
+function renderSourcePicker(){
+ const select=$('#sourceSelect'),value=board.sourceKeys==null?'all':board.sourceKeys[0]||'none';select.replaceChildren();
+ const choices=[['none','不自動匯入標記'],['all','所有已接收的序列']],seen=new Set();
+ for(const c of sources){if(c.sequenceAvailable===false)continue;const key=sourceKey(c);if(!seen.has(key)){seen.add(key);choices.push([key,c.sequenceName||'未命名序列'])}}
+ const removed=!['none','all'].includes(value)&&sources.some(c=>sourceKey(c)===value&&c.sequenceAvailable===false)&&!seen.has(value);
+ if(!['none','all'].includes(value)&&!seen.has(value))choices.push([value,removed?'原選序列已刪除，請重新選擇':'已選序列（等待接收）']);
+ for(const [id,title]of choices){const o=node('option','',title);o.value=id;o.disabled=removed&&id===value;select.append(o)}select.value=value;
+}
 const markerPalette=[['綠色','#70ad47'],['紅色','#df5353'],['洋紅色','#c05cbd'],['橙色','#e5933e'],['黃色','#e6ca48'],['白色','#ffffff'],['藍色','#5797d1'],['青色','#4ebbc6']];
 function markerAppearance(c){const index=Number.isInteger(c.color)?c.color:null,fallback=index!==null?markerPalette[index]:null,hex=/^#[a-f0-9]{6}$/i.test(c.markerColorHex||'')?c.markerColorHex:fallback?.[1]||'#d4d8d0',names={GREEN:'綠色',RED:'紅色',MAGENTA:'洋紅色',MAGNETA:'洋紅色',ORANGE:'橙色',YELLOW:'黃色',WHITE:'白色',BLUE:'藍色',CYAN:'青色'};return {hex,label:(names[c.markerColorName]||fallback?.[0]||(index!==null?'色號 '+index:'顏色未提供'))}}
 const defaultMarkerLabels={'0':'搞笑','1':'紅色','2':'洋紅','3':'橙色','4':'黃色','5':'白色','6':'知識','7':'青色'};
@@ -202,7 +209,7 @@ $('#categoryPreset').onchange=()=>selectCategoryPreset($('#categoryPreset').valu
 const receiverURL='http://127.0.0.1:43128';
 let receiverSession=sessionStorage.getItem('markerboard-receiver')||'',receiverImageCache=new Map();
 async function receiverFetch(route,options={}){
- const r=await fetch(receiverURL+'/api/bridge/'+route,{...options,mode:'cors',targetAddressSpace:'loopback',signal:AbortSignal.timeout(8000),headers:{...(receiverSession?{Authorization:'Bearer '+receiverSession}:{}),...options.headers}});
+ const r=await fetch(receiverURL+'/api/bridge/'+route,{...options,mode:'cors',targetAddressSpace:'loopback',signal:AbortSignal.timeout(route==='pair'?60000:8000),headers:{...(receiverSession?{Authorization:'Bearer '+receiverSession}:{}),...options.headers}});
  if(r.status===401){receiverSession='';sessionStorage.removeItem('markerboard-receiver');updateReceiverButton();throw Error('配對已過期，請重新連接 Premiere。')}
  if(!r.ok)throw Error(r.status===403?'配對碼錯誤或已過期，請重新啟動接收服務取得新碼。':r.status===429?'配對嘗試過多，請重新啟動接收服務。':'本機連線失敗（'+r.status+'）');
  return r;
@@ -211,6 +218,7 @@ async function receiverCards(){
  const response=await receiverFetch('cards'),cards=await response.json();
  const keep=new Set();
  for(const c of cards){
+  if(c.sequenceAvailable===false)continue;
   const key=c.id+':'+c.revision;keep.add(key);
   if(!receiverImageCache.has(key)){
    if(!/^[a-f0-9]{64}$/.test(c.id))throw Error('無效的標記資料');
@@ -240,7 +248,7 @@ function configureStaticHosting(){
   try{
    const r=await receiverFetch('pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:input.value})});
    receiverSession=(await r.json()).token;sessionStorage.setItem('markerboard-receiver',receiverSession);input.value='';dialog.close();updateReceiverButton();await refresh(true);
-  }catch(e){error.textContent=e instanceof TypeError?'無法連接。請確認接收服務已啟動，並允許此網站存取本機網路。':e.message}finally{submit.disabled=false}
+  }catch(e){error.textContent=e instanceof TypeError||e.name==='TimeoutError'?'無法連接。請確認接收服務已啟動，並允許此網站存取本機網路。若先前拒絕，請在網址列左側的網站設定重新允許。':e.message}finally{submit.disabled=false}
  };
  button.onclick=async()=>{
   if(receiverSession){try{await receiverFetch('session',{method:'DELETE'})}catch{}receiverSession='';sessionStorage.removeItem('markerboard-receiver');receiverImageCache.clear();updateReceiverButton();return}
